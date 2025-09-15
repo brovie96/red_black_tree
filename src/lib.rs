@@ -184,9 +184,9 @@ impl<T: Clone + Ord> RedBlackTree<T> {
                 // rebalance the tree
                 self.rebalance_at_point(new_node);
                 self.size += 1;
-                return true;
+                true
             },
-            Ok(_) => return false,
+            Ok(_) => false,
         }
     }
 
