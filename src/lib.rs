@@ -174,40 +174,19 @@ impl<T: Clone + Ord> RedBlackTree<T> {
         }
 
         // walk down tree to insertion point
-        let mut check_node = self.root.clone();
-
-        loop {
-            if val < check_node.as_ref().unwrap().borrow().val {
-                // try moving left
-                if check_node.as_ref().unwrap().borrow().left.is_some() {
-                    check_node = check_node.take().unwrap().borrow().left.clone();
-                } else {
-                    // found the insertion point!
-                    // insert the node
-                    new_node.as_ref().unwrap().borrow_mut().parent = Some(Rc::downgrade(check_node.as_ref().unwrap()));
-                    check_node.as_ref().unwrap().borrow_mut().left = new_node.clone();
-                    // rebalance the tree
-                    self.rebalance_at_point(new_node);
-                    self.size += 1;
-                    return true;
+        match self.find_target_node(val) {
+            Err((check_node, insert_direction)) => {
+                new_node.as_ref().unwrap().borrow_mut().parent = Some(Rc::downgrade(check_node.as_ref().unwrap()));
+                match insert_direction {
+                    Direction::Left => check_node.as_ref().unwrap().borrow_mut().left = new_node.clone(),
+                    Direction::Right => check_node.as_ref().unwrap().borrow_mut().right = new_node.clone(),
                 }
-            } else if val > check_node.as_ref().unwrap().borrow().val {
-                // try moving right
-                if check_node.as_ref().unwrap().borrow().right.is_some() {
-                    check_node = check_node.take().unwrap().borrow().right.clone();
-                } else {
-                    // found the insertion point!
-                    // insert the node
-                    new_node.as_ref().unwrap().borrow_mut().parent = Some(Rc::downgrade(check_node.as_ref().unwrap()));
-                    check_node.as_ref().unwrap().borrow_mut().right = new_node.clone();
-                    // rebalance the tree
-                    self.rebalance_at_point(new_node);
-                    self.size += 1;
-                    return true;
-                }
-            } else { // val == <val at check node>
-                return false;
-            }
+                // rebalance the tree
+                self.rebalance_at_point(new_node);
+                self.size += 1;
+                return true;
+            },
+            Ok(_) => return false,
         }
     }
 
@@ -227,31 +206,8 @@ impl<T: Clone + Ord> RedBlackTree<T> {
         if self.root.is_none() {
             return false;
         }
-        // walk down tree to look for the node with c in it
-        let mut check_node = self.root.clone();
-
-        loop {
-            if val < check_node.as_ref().unwrap().borrow().val {
-                // try moving left
-                if check_node.as_ref().unwrap().borrow().left.is_some() {
-                    check_node = check_node.take().unwrap().borrow().left.clone();
-                } else {
-                    // not here
-                    return false;
-                }
-            } else if val > check_node.as_ref().unwrap().borrow().val {
-                // try moving right
-                if check_node.as_ref().unwrap().borrow().right.is_some() {
-                    check_node = check_node.take().unwrap().borrow().right.clone();
-                } else {
-                    // not here
-                    return false;
-                }
-            } else { // val == <val at check node>
-                // found it!
-                return true;
-            }
-        }
+        // look for target node and return whether it is some
+        self.find_target_node(val).is_ok()
     }
 
     /// Removes a value from the tree if it exists.
@@ -275,31 +231,11 @@ impl<T: Clone + Ord> RedBlackTree<T> {
             return false;
         }
 
-        // walk down tree to look for the node with c in it
-        let mut removal_node = self.root.clone();
-
-        loop {
-            if val < removal_node.as_ref().unwrap().borrow().val {
-                // try moving left
-                if removal_node.as_ref().unwrap().borrow().left.is_some() {
-                    removal_node = removal_node.take().unwrap().borrow().left.clone();
-                } else {
-                    // not here
-                    return false;
-                }
-            } else if val > removal_node.as_ref().unwrap().borrow().val {
-                // try moving right
-                if removal_node.as_ref().unwrap().borrow().right.is_some() {
-                    removal_node = removal_node.take().unwrap().borrow().right.clone();
-                } else {
-                    // not here
-                    return false;
-                }
-            } else { // val == <val at check node>
-                // found it!
-                break;
-            }
-        }
+        // get node to remove, and return false if it is none
+        let mut removal_node = match self.find_target_node(val) {
+            Ok(node) => node,
+            Err(_) => return false,
+        };
 
         // decrement size since we are doing a removal if we got here
         self.size -= 1;
@@ -349,6 +285,36 @@ impl<T: Clone + Ord> RedBlackTree<T> {
         } // skipping this block is case 1
 
         true
+    }
+
+    fn find_target_node(&self, target: T) -> Result<Link<T>, (Link<T>, Direction)> {
+        // walk down tree to look for the node with target in it
+        let mut target_node = self.root.clone();
+
+        loop {
+            if target < target_node.as_ref().unwrap().borrow().val {
+                // try moving left
+                if target_node.as_ref().unwrap().borrow().left.is_some() {
+                    target_node = target_node.take().unwrap().borrow().left.clone();
+                } else {
+                    // not here
+                    return Err((target_node, Direction::Left));
+                }
+            } else if target > target_node.as_ref().unwrap().borrow().val {
+                // try moving right
+                if target_node.as_ref().unwrap().borrow().right.is_some() {
+                    target_node = target_node.take().unwrap().borrow().right.clone();
+                } else {
+                    // not here
+                    return Err((target_node, Direction::Right));
+                }
+            } else { // val == <val at target_node>
+                // found it!
+                break;
+            }
+        }
+
+        Ok(target_node)
     }
 
     fn resolve_double_black(&mut self, db_node: Link<T>, db_direction: Option<Direction>) {
