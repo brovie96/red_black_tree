@@ -611,6 +611,34 @@ impl<T: Clone + Ord> From<RedBlackTree<T>> for Vec<T> {
     }
 }
 
+/// A helper macro for creating red-black trees from arbitrary data.
+/// There are two forms of this macro:
+/// - Create a red-black tree from a list of elements:
+/// ```
+/// # use red_black_tree::{RedBlackTree, rbt};
+/// let tree = rbt![1, 2, 3];
+/// assert!(tree.contains(1));
+/// assert!(tree.contains(2));
+/// assert!(tree.contains(3));
+/// ```
+/// - Create a red-black tree from an arbitrary iterator:
+/// ```
+/// # use red_black_tree::{RedBlackTree, rbt};
+/// let tree = rbt!(i in 1..=15);
+/// for i in 1..=15 {
+///     assert!(tree.contains(i));
+/// }
+/// ```
+#[macro_export]
+macro_rules! rbt {
+    ($($e:expr),*) => {
+        vec![$($e),*].into_iter().collect::<RedBlackTree<_>>()
+    };
+    ($i:ident in $e:expr) => {
+        $e.collect::<RedBlackTree<_>>()
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::RedBlackTree;
@@ -652,6 +680,21 @@ mod tests {
                 // make sure *these* values cannot be found
                 assert_eq!(tree.contains(i), false);
             }
+        }
+    }
+
+    #[test]
+    fn test_macro() {
+        // test value form
+        let list_tree = rbt![1, 2, 3, 4];
+        assert_eq!(list_tree.contains(1), true);
+        assert_eq!(list_tree.contains(2), true);
+        assert_eq!(list_tree.contains(3), true);
+        assert_eq!(list_tree.contains(4), true);
+        // test iterator form
+        let iter_tree = rbt!(i in 1..=15);
+        for i in 1..=15 {
+            assert_eq!(iter_tree.contains(i), true);
         }
     }
 }
