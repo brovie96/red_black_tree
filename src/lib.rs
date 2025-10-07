@@ -27,6 +27,7 @@ pub struct RedBlackTree<T: Clone + Ord> {
 }
 
 type Link<T> = Option<Rc<RefCell<Node<T>>>>;
+type RefLink<'a, T> = Option<&'a Rc<RefCell<Node<T>>>>;
 type WeakLink<T> = Option<Weak<RefCell<Node<T>>>>;
 
 #[derive(Debug)]
@@ -65,33 +66,19 @@ impl<T: Clone + Ord> Node<T> {
         Some(Rc::new(RefCell::new(Self { val, color: Color::Red, parent: None, left: None, right: None })))
     }
 
-    fn direction(&self) -> Option<Direction> {
-        let parent_strong = self.parent.as_ref().and_then(|weak| weak.upgrade());
-
-        if parent_strong.is_none() {
-            None
-        } else if parent_strong.as_ref().unwrap().borrow().right.is_some() && *self == *parent_strong.as_ref().unwrap().borrow().right.as_ref().unwrap().borrow() {
-            Some(Direction::Right)
-        } else {
-            Some(Direction::Left)
-        }
+    fn direction(this: RefLink<T>) -> Option<Direction> {
+        this.unwrap().borrow().parent.as_ref().and_then(|weak| weak.upgrade()).map(|parent|
+            if parent.borrow().right.is_some() && Rc::ptr_eq(this.unwrap(), parent.borrow().right.as_ref().unwrap()) {
+                Direction::Right
+            } else {
+                Direction::Left
+            })
     }
 
     fn is_leaf(&self) -> bool {
         self.left.is_none() && self.right.is_none()
     }
 }
-
-impl<T: Clone + Ord> PartialEq for Node<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.parent.clone().and_then(|weak| weak.upgrade()) == other.parent.clone().and_then(|weak| weak.upgrade())
-            && self.val == other.val
-            && self.left == other.left
-            && self.right == other.right
-    }
-}
-
-impl<T: Clone + Ord> Eq for Node<T> {}
 
 impl<T: Clone + Ord> RedBlackTree<T> {
     /// Creates a new empty tree.
@@ -173,20 +160,19 @@ impl<T: Clone + Ord> RedBlackTree<T> {
             return true;
         }
 
-        // walk down tree to insertion point
-        match self.find_target_node(val) {
-            Err((check_node, insert_direction)) => {
-                new_node.as_ref().unwrap().borrow_mut().parent = Some(Rc::downgrade(check_node.as_ref().unwrap()));
-                match insert_direction {
-                    Direction::Left => check_node.as_ref().unwrap().borrow_mut().left = new_node.clone(),
-                    Direction::Right => check_node.as_ref().unwrap().borrow_mut().right = new_node.clone(),
-                }
-                // rebalance the tree
-                self.rebalance_at_point(new_node);
-                self.size += 1;
-                true
-            },
-            Ok(_) => false,
+        // insert node if the value is not already in the tree
+        if let Err((parent_node, insert_direction)) = self.find_target_node(val) {
+            new_node.as_ref().unwrap().borrow_mut().parent = Some(Rc::downgrade(parent_node.as_ref().unwrap()));
+            match insert_direction {
+                Direction::Left => parent_node.as_ref().unwrap().borrow_mut().left = new_node.clone(),
+                Direction::Right => parent_node.as_ref().unwrap().borrow_mut().right = new_node.clone(),
+            }
+            // rebalance the tree
+            self.rebalance_at_point(new_node);
+            self.size += 1;
+            true
+        } else {
+            false
         }
     }
 
@@ -232,9 +218,10 @@ impl<T: Clone + Ord> RedBlackTree<T> {
         }
 
         // get node to remove, and return false if it is none
-        let mut removal_node = match self.find_target_node(val) {
-            Ok(node) => node,
-            Err(_) => return false,
+        let mut removal_node = if let Ok(node) = self.find_target_node(val) {
+            node
+        } else {
+            return false;
         };
 
         // decrement size since we are doing a removal if we got here
@@ -268,12 +255,12 @@ impl<T: Clone + Ord> RedBlackTree<T> {
         // we are down to a leaf node; remove it
         // if removal node is root, it is the last element in the tree;
         // unassign root and we're done
-        if removal_node == self.root {
+        if Rc::ptr_eq(removal_node.as_ref().unwrap(), self.root.as_ref().unwrap()) {
             self.root = None;
             return true;
         }
         let parent = removal_node.as_ref().unwrap().borrow().parent.as_ref().and_then(|node| node.upgrade());
-        let removal_node_direction = removal_node.as_ref().unwrap().borrow().direction();
+        let removal_node_direction = Node::direction(removal_node.as_ref());
         match removal_node_direction.as_ref().unwrap() {
             Direction::Left => parent.as_ref().unwrap().borrow_mut().left = None,
             Direction::Right => parent.as_ref().unwrap().borrow_mut().right = None,
@@ -304,7 +291,7 @@ impl<T: Clone + Ord> RedBlackTree<T> {
                 } else {
                     Direction::Right
                 };
-                if let Some(child) = Self::check_child(&cur_node, direction) {
+                if let Some(child) = Self::check_child(cur_node.as_ref(), direction) {
                     // if the child is Some, continue searching
                     cur_node = child;
                 } else {
@@ -316,27 +303,21 @@ impl<T: Clone + Ord> RedBlackTree<T> {
     }
 
     // checks child in the given direction and returns it if it's some
-    fn check_child(node: &Link<T>, direction: Direction) -> Option<Link<T>> {
-        let child = match direction {
-            Direction::Left => node.as_ref().unwrap().borrow().left.clone(),
-            Direction::Right => node.as_ref().unwrap().borrow().right.clone(),
-        };
-
-        if child.is_some() {
-            Some(child)
-        } else {
-            None
-        }
+    fn check_child(node: RefLink<T>, direction: Direction) -> Option<Link<T>> {
+        match direction {
+            Direction::Left => node.unwrap().borrow().left.clone(),
+            Direction::Right => node.unwrap().borrow().right.clone(),
+        }.map(Some)
     }
 
     fn resolve_double_black(&mut self, db_node: Link<T>, db_direction: Option<Direction>) {
         // easiest case (if db is root, we're done)
-        if db_node == self.root {
+        if Rc::ptr_eq(db_node.as_ref().unwrap(), self.root.as_ref().unwrap()) {
             // case 2
             return;
         }
 
-        let db_direction = db_direction.or_else(|| db_node.as_ref().unwrap().borrow().direction()).unwrap();
+        let db_direction = db_direction.or_else(|| Node::direction(db_node.as_ref())).unwrap();
 
         // implement other cases
         let sibling = match db_direction {
@@ -347,52 +328,51 @@ impl<T: Clone + Ord> RedBlackTree<T> {
         let sibling_color = sibling.as_ref().unwrap().borrow().color;
         match sibling_color {
             Color::Black => {
-                let sibling_near_child_color = match db_direction {
-                    Direction::Left => sibling.as_ref().unwrap().borrow().left.as_ref().map_or(Color::Black, |rc| rc.borrow().color),
-                    Direction::Right => sibling.as_ref().unwrap().borrow().right.as_ref().map_or(Color::Black, |rc| rc.borrow().color),
+                let (sibling_near_child_color, sibling_far_child_color) = match db_direction {
+                    Direction::Left => {
+                        (sibling.as_ref().unwrap().borrow().left.as_ref().map_or(Color::Black, |rc| rc.borrow().color),
+                            sibling.as_ref().unwrap().borrow().right.as_ref().map_or(Color::Black, |rc| rc.borrow().color))
+                    }
+                    Direction::Right => {
+                        (sibling.as_ref().unwrap().borrow().right.as_ref().map_or(Color::Black, |rc| rc.borrow().color),
+                            sibling.as_ref().unwrap().borrow().left.as_ref().map_or(Color::Black, |rc| rc.borrow().color))
+                    }
                 };
 
-                let sibling_far_child_color = match db_direction {
-                    Direction::Left => sibling.as_ref().unwrap().borrow().right.as_ref().map_or(Color::Black, |rc| rc.borrow().color),
-                    Direction::Right => sibling.as_ref().unwrap().borrow().left.as_ref().map_or(Color::Black, |rc| rc.borrow().color),
-                };
-
-                match sibling_far_child_color {
-                    Color::Black => match sibling_near_child_color {
-                        Color::Black => {
-                            // case 3
-                            // make sibling red
-                            sibling.as_ref().unwrap().borrow_mut().color = Color::Red;
-                            let parent = db_node.as_ref().unwrap().borrow().parent.as_ref().and_then(|weak| weak.upgrade());
-                            let parent_color = parent.as_ref().unwrap().borrow().color;
-                            match parent_color {
-                                Color::Red => {
-                                    // make it black
-                                    parent.as_ref().unwrap().borrow_mut().color = Color::Black;
-                                }
-                                Color::Black => {
-                                    // parent becomes double black; rerun this for parent
-                                    self.resolve_double_black(parent, None);
-                                }
+                match (sibling_far_child_color, sibling_near_child_color) {
+                    (Color::Black, Color::Black) => {
+                        // case 3
+                        // make sibling red
+                        sibling.as_ref().unwrap().borrow_mut().color = Color::Red;
+                        let parent = db_node.as_ref().unwrap().borrow().parent.as_ref().and_then(|weak| weak.upgrade());
+                        let parent_color = parent.as_ref().unwrap().borrow().color;
+                        match parent_color {
+                            Color::Red => {
+                                // make it black
+                                parent.as_ref().unwrap().borrow_mut().color = Color::Black;
+                            }
+                            Color::Black => {
+                                // parent becomes double black; rerun this for parent
+                                self.resolve_double_black(parent, None);
                             }
                         }
-                        Color::Red => {
-                            // case 5
-                            // swap color of sibling with near child
-                            let sibling_near_child = match db_direction {
-                                Direction::Left => sibling.as_ref().unwrap().borrow().left.clone(),
-                                Direction::Right => sibling.as_ref().unwrap().borrow().right.clone(),
-                            };
-                            // we already know near child is red and sibling is black, so no need for checking
-                            sibling.as_ref().unwrap().borrow_mut().color = Color::Red;
-                            sibling_near_child.as_ref().unwrap().borrow_mut().color = Color::Black;
-                            // rotate at sibling in opposite direction of db_node
-                            self.rotate_subtree(sibling, db_direction.opposite());
-                            // rerun this for the same node (will probably be case 6)
-                            self.resolve_double_black(db_node, Some(db_direction));
-                        }
                     }
-                    Color::Red => {
+                    (Color::Black, Color::Red) => {
+                        // case 5
+                        // swap color of sibling with near child
+                        let sibling_near_child = match db_direction {
+                            Direction::Left => sibling.as_ref().unwrap().borrow().left.clone(),
+                            Direction::Right => sibling.as_ref().unwrap().borrow().right.clone(),
+                        };
+                        // we already know near child is red and sibling is black, so no need for checking
+                        sibling.as_ref().unwrap().borrow_mut().color = Color::Red;
+                        sibling_near_child.as_ref().unwrap().borrow_mut().color = Color::Black;
+                        // rotate at sibling in opposite direction of db_node
+                        self.rotate_subtree(sibling, db_direction.opposite());
+                        // rerun this for the same node (will probably be case 6)
+                        self.resolve_double_black(db_node, Some(db_direction));
+                    }
+                    (Color::Red, _) => {
                         // case 6
                         // swap parent color with sibling color
                         let parent = db_node.as_ref().unwrap().borrow().parent.as_ref().and_then(|weak| weak.upgrade());
@@ -430,7 +410,7 @@ impl<T: Clone + Ord> RedBlackTree<T> {
 
     fn rebalance_at_point(&mut self, node: Link<T>) {
         // base case
-        if node == self.root {
+        if Rc::ptr_eq(node.as_ref().unwrap(), self.root.as_ref().unwrap()) {
             // hit the root; make sure it's colored black and return
             self.root.as_ref().unwrap().borrow_mut().color = Color::Black;
             return;
@@ -446,13 +426,12 @@ impl<T: Clone + Ord> RedBlackTree<T> {
 
         // get grandparent and uncle
         let grandparent = parent.as_ref().unwrap().borrow().parent.as_ref().unwrap().upgrade();
-        let uncle = match parent.as_ref().unwrap().borrow().direction().unwrap() {
+        let uncle = match Node::direction(parent.as_ref()).unwrap() {
             Direction::Left => grandparent.as_ref().unwrap().borrow().right.clone(),
             Direction::Right => grandparent.as_ref().unwrap().borrow().left.clone(),
         };
 
-        let uncle_color = uncle.as_ref().map_or(Color::Black, |rc| rc.borrow().color);
-        match uncle_color {
+        match uncle.as_ref().map_or(Color::Black, |rc| rc.borrow().color) {
             Color::Red => {
                 // color parent and uncle black
                 parent.as_ref().unwrap().borrow_mut().color = Color::Black;
@@ -463,49 +442,45 @@ impl<T: Clone + Ord> RedBlackTree<T> {
                 self.rebalance_at_point(grandparent);
             }
             Color::Black => {
-                let node_direction = node.as_ref().unwrap().borrow().direction().unwrap();
-                let parent_direction = parent.as_ref().unwrap().borrow().direction().unwrap();
+                let node_direction = Node::direction(node.as_ref()).unwrap();
+                let parent_direction = Node::direction(parent.as_ref()).unwrap();
 
-                match parent_direction {
-                    Direction::Left => match node_direction {
-                        Direction::Left => {
-                            // right rotate on grandparent
-                            self.rotate_subtree(grandparent.clone(), Direction::Right);
-                            // swap colors of grandparent and parent
-                            let parent_color = parent.as_ref().unwrap().borrow().color;
-                            parent.as_ref().unwrap().borrow_mut().color = grandparent.as_ref().unwrap().borrow().color;
-                            grandparent.as_ref().unwrap().borrow_mut().color = parent_color;
-                        }
-                        Direction::Right => {
-                            // left rotation on parent
-                            self.rotate_subtree(parent.clone(), Direction::Left);
-                            // right rotate on grandparent
-                            self.rotate_subtree(grandparent.clone(), Direction::Right);
-                            // swap colors of grandparent and node
-                            let node_color = node.as_ref().unwrap().borrow().color;
-                            node.as_ref().unwrap().borrow_mut().color = grandparent.as_ref().unwrap().borrow().color;
-                            grandparent.as_ref().unwrap().borrow_mut().color = node_color;
-                        }
+                match (parent_direction, node_direction) {
+                    (Direction::Left, Direction::Left) => {
+                        // right rotate on grandparent
+                        self.rotate_subtree(grandparent.clone(), Direction::Right);
+                        // swap colors of grandparent and parent
+                        let parent_color = parent.as_ref().unwrap().borrow().color;
+                        parent.as_ref().unwrap().borrow_mut().color = grandparent.as_ref().unwrap().borrow().color;
+                        grandparent.as_ref().unwrap().borrow_mut().color = parent_color;
                     }
-                    Direction::Right => match node_direction {
-                        Direction::Left => {
-                            // right rotate on parent
-                            self.rotate_subtree(parent.clone(), Direction::Right);
-                            // left rotate on grandparent
-                            self.rotate_subtree(grandparent.clone(), Direction::Left);
-                            // swap colors of grandparent and node
-                            let node_color = node.as_ref().unwrap().borrow().color;
-                            node.as_ref().unwrap().borrow_mut().color = grandparent.as_ref().unwrap().borrow().color;
-                            grandparent.as_ref().unwrap().borrow_mut().color = node_color;
-                        }
-                        Direction::Right => {
-                            // left rotate on grandparent
-                            self.rotate_subtree(grandparent.clone(), Direction::Left);
-                            // swap colors of grandparent and parent
-                            let parent_color = parent.as_ref().unwrap().borrow().color;
-                            parent.as_ref().unwrap().borrow_mut().color = grandparent.as_ref().unwrap().borrow().color;
-                            grandparent.as_ref().unwrap().borrow_mut().color = parent_color;
-                        }
+                    (Direction::Left, Direction::Right) => {
+                        // left rotation on parent
+                        self.rotate_subtree(parent.clone(), Direction::Left);
+                        // right rotate on grandparent
+                        self.rotate_subtree(grandparent.clone(), Direction::Right);
+                        // swap colors of grandparent and node
+                        let node_color = node.as_ref().unwrap().borrow().color;
+                        node.as_ref().unwrap().borrow_mut().color = grandparent.as_ref().unwrap().borrow().color;
+                        grandparent.as_ref().unwrap().borrow_mut().color = node_color;
+                    }
+                    (Direction::Right, Direction::Left) => {
+                        // right rotate on parent
+                        self.rotate_subtree(parent.clone(), Direction::Right);
+                        // left rotate on grandparent
+                        self.rotate_subtree(grandparent.clone(), Direction::Left);
+                        // swap colors of grandparent and node
+                        let node_color = node.as_ref().unwrap().borrow().color;
+                        node.as_ref().unwrap().borrow_mut().color = grandparent.as_ref().unwrap().borrow().color;
+                        grandparent.as_ref().unwrap().borrow_mut().color = node_color;
+                    }
+                    (Direction::Right, Direction::Right) => {
+                        // left rotate on grandparent
+                        self.rotate_subtree(grandparent.clone(), Direction::Left);
+                        // swap colors of grandparent and parent
+                        let parent_color = parent.as_ref().unwrap().borrow().color;
+                        parent.as_ref().unwrap().borrow_mut().color = grandparent.as_ref().unwrap().borrow().color;
+                        grandparent.as_ref().unwrap().borrow_mut().color = parent_color;
                     }
                 }
             }
@@ -518,9 +493,8 @@ impl<T: Clone + Ord> RedBlackTree<T> {
         }
 
         let subtree_parent = subtree_root.as_ref().unwrap().borrow().parent.clone();
-        let subtree_direction = subtree_root.as_ref().unwrap().borrow().direction();
-
-        match direction {
+        let subtree_direction = Node::direction(subtree_root.as_ref());
+        let pivot = match direction {
             Direction::Left => {
                 let pivot = subtree_root.as_ref().unwrap().borrow().right.clone();
                 // point subtree_root->right at pivot->left and rewire parent
@@ -528,25 +502,9 @@ impl<T: Clone + Ord> RedBlackTree<T> {
                 if subtree_root.as_ref().unwrap().borrow().right.is_some() {
                     subtree_root.as_ref().unwrap().borrow().right.as_ref().unwrap().borrow_mut().parent = Some(Rc::downgrade(subtree_root.as_ref().unwrap()));
                 }
-                // point pivot->left at subtree_root and rewire parent
+                // point pivot->left at subtree_root
                 pivot.as_ref().unwrap().borrow_mut().left = subtree_root.clone();
-                subtree_root.as_ref().unwrap().borrow_mut().parent = Some(Rc::downgrade(pivot.as_ref().unwrap()));
-                // rewire subtree_parent
-                if let Some(subtree_direction) = subtree_direction {
-                    match subtree_direction {
-                        Direction::Left => {
-                            subtree_parent.as_ref().unwrap().upgrade().unwrap().borrow_mut().left = pivot.clone();
-                        }
-                        Direction::Right => {
-                            subtree_parent.as_ref().unwrap().upgrade().unwrap().borrow_mut().right = pivot.clone();
-                        }
-                    }
-                    pivot.as_ref().unwrap().borrow_mut().parent = subtree_parent;
-                } else {
-                    // subtree_root was root; reassign root and make parent None
-                    self.root = pivot.clone();
-                    pivot.as_ref().unwrap().borrow_mut().parent = None;
-                }
+                pivot
             }
             Direction::Right => {
                 let pivot = subtree_root.as_ref().unwrap().borrow().left.clone();
@@ -555,26 +513,30 @@ impl<T: Clone + Ord> RedBlackTree<T> {
                 if subtree_root.as_ref().unwrap().borrow().left.is_some() {
                     subtree_root.as_ref().unwrap().borrow().left.as_ref().unwrap().borrow_mut().parent = Some(Rc::downgrade(subtree_root.as_ref().unwrap()));
                 }
-                // point pivot->right at subtree_root and rewire parent
+                // point pivot->right at subtree_root
                 pivot.as_ref().unwrap().borrow_mut().right = subtree_root.clone();
-                subtree_root.as_ref().unwrap().borrow_mut().parent = Some(Rc::downgrade(pivot.as_ref().unwrap()));
-                // rewire subtree_parent
-                if let Some(subtree_direction) = subtree_direction {
-                    match subtree_direction {
-                        Direction::Left => {
-                            subtree_parent.as_ref().unwrap().upgrade().unwrap().borrow_mut().left = pivot.clone();
-                        }
-                        Direction::Right => {
-                            subtree_parent.as_ref().unwrap().upgrade().unwrap().borrow_mut().right = pivot.clone();
-                        }
-                    }
-                    pivot.as_ref().unwrap().borrow_mut().parent = subtree_parent;
-                } else {
-                    // subtree_root was root; reassign root and make parent None
-                    self.root = pivot.clone();
-                    pivot.as_ref().unwrap().borrow_mut().parent = None;
+                pivot
+            }
+        };
+
+        // rewire subtree_root's parent
+        subtree_root.as_ref().unwrap().borrow_mut().parent = Some(Rc::downgrade(pivot.as_ref().unwrap()));
+
+        // rewire subtree_parent
+        if let Some(subtree_direction) = subtree_direction {
+            match subtree_direction {
+                Direction::Left => {
+                    subtree_parent.as_ref().unwrap().upgrade().unwrap().borrow_mut().left = pivot.clone();
+                }
+                Direction::Right => {
+                    subtree_parent.as_ref().unwrap().upgrade().unwrap().borrow_mut().right = pivot.clone();
                 }
             }
+            pivot.as_ref().unwrap().borrow_mut().parent = subtree_parent;
+        } else {
+            // subtree_root was root; reassign root and make parent None
+            self.root = pivot.clone();
+            pivot.as_ref().unwrap().borrow_mut().parent = None;
         }
     }
 
