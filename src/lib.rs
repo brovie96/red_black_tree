@@ -287,34 +287,46 @@ impl<T: Clone + Ord> RedBlackTree<T> {
         true
     }
 
+    // returns the node with the target value if it is in the tree
+    // otherwise returns the insertion point (parent and direction)
     fn find_target_node(&self, target: T) -> Result<Link<T>, (Link<T>, Direction)> {
         // walk down tree to look for the node with target in it
-        let mut target_node = self.root.clone();
+        let mut cur_node = self.root.clone();
 
         loop {
-            if target < target_node.as_ref().unwrap().borrow().val {
-                // try moving left
-                if target_node.as_ref().unwrap().borrow().left.is_some() {
-                    target_node = target_node.take().unwrap().borrow().left.clone();
-                } else {
-                    // not here
-                    return Err((target_node, Direction::Left));
-                }
-            } else if target > target_node.as_ref().unwrap().borrow().val {
-                // try moving right
-                if target_node.as_ref().unwrap().borrow().right.is_some() {
-                    target_node = target_node.take().unwrap().borrow().right.clone();
-                } else {
-                    // not here
-                    return Err((target_node, Direction::Right));
-                }
-            } else { // val == <val at target_node>
+            if cur_node.as_ref().unwrap().borrow().val == target {
                 // found it!
-                break;
+                return Ok(cur_node);
+            } else {
+                // continue down to the children
+                let direction = if target < cur_node.as_ref().unwrap().borrow().val {
+                    Direction::Left
+                } else {
+                    Direction::Right
+                };
+                if let Some(child) = Self::check_child(&cur_node, direction) {
+                    // if the child is Some, continue searching
+                    cur_node = child;
+                } else {
+                    // if the child is None, target is not in the tree
+                    return Err((cur_node, direction))
+                }
             }
         }
+    }
 
-        Ok(target_node)
+    // checks child in the given direction and returns it if it's some
+    fn check_child(node: &Link<T>, direction: Direction) -> Option<Link<T>> {
+        let child = match direction {
+            Direction::Left => node.as_ref().unwrap().borrow().left.clone(),
+            Direction::Right => node.as_ref().unwrap().borrow().right.clone(),
+        };
+
+        if child.is_some() {
+            Some(child)
+        } else {
+            None
+        }
     }
 
     fn resolve_double_black(&mut self, db_node: Link<T>, db_direction: Option<Direction>) {
@@ -612,6 +624,7 @@ impl<T: Clone + Ord> From<RedBlackTree<T>> for Vec<T> {
 }
 
 /// A helper macro for creating red-black trees from arbitrary data.
+///
 /// There are two forms of this macro:
 /// - Create a red-black tree from a list of elements:
 /// ```
