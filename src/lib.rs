@@ -621,7 +621,7 @@ impl<T: Clone + Ord> From<RedBlackTree<T>> for Vec<T> {
 /// assert!(tree.contains(2));
 /// assert!(tree.contains(3));
 /// ```
-/// - Create a red-black tree from an arbitrary iterator:
+/// - Create a red-black tree from an iterator:
 /// ```
 /// # use red_black_tree::{RedBlackTree, rbt};
 /// let tree = rbt!(i in 1..=15);
@@ -632,7 +632,7 @@ impl<T: Clone + Ord> From<RedBlackTree<T>> for Vec<T> {
 #[macro_export]
 macro_rules! rbt {
     ($($e:expr),*) => {
-        vec![$($e),*].into_iter().collect::<RedBlackTree<_>>()
+        rbt!(i in vec![$($e),*].into_iter())
     };
     ($i:ident in $e:expr) => {
         $e.collect::<RedBlackTree<_>>()
@@ -695,6 +695,30 @@ mod tests {
         let iter_tree = rbt!(i in 1..=15);
         for i in 1..=15 {
             assert_eq!(iter_tree.contains(i), true);
+        }
+        // make sure iterator form works with the relatively complex iterator from the main tests
+        let mut complex_iter_tree = rbt!(i in (1..=30).filter(|i| i % 2 == 0 || i % 3 == 0 || i % 5 == 0));
+        let mut check_size = complex_iter_tree.size();
+        for i in 1..=30 {
+            if i % 2 == 0 || i % 3 == 0 || i % 5 == 0 {
+                // make sure values already in the tree cannot be inserted again, but can be found
+                assert_eq!(complex_iter_tree.insert(i), false);
+                // make sure these values can be found
+                assert_eq!(complex_iter_tree.contains(i), true);
+                // try removing the value
+                println!("removing {i}");
+                assert_eq!(complex_iter_tree.remove(i), true);
+                // make sure size goes down
+                check_size -= 1;
+                assert_eq!(complex_iter_tree.size(), check_size);
+                println!("{complex_iter_tree:?}");
+                println!();
+                // make sure that we cannot find the value after removal
+                assert_eq!(complex_iter_tree.contains(i), false);
+            } else {
+                // make sure *these* values cannot be found
+                assert_eq!(complex_iter_tree.contains(i), false);
+            }
         }
     }
 }
