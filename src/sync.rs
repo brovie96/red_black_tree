@@ -587,9 +587,8 @@ impl<T: Clone + Ord> From<RedBlackTree<T>> for Vec<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::rbt;
-
     use super::RedBlackTree;
+    use crate::rbt;
 
     #[test]
     fn basics() {
